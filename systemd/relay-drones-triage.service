@@ -1,0 +1,10 @@
+[Unit]
+Description=relay-drones triage (drain inbox into queue)
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO}}
+EnvironmentFile=-%h/.config/relay-drones/env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH={{REPO}}
+ExecStart={{PY}} {{REPO}}/bin/relay-drones triage

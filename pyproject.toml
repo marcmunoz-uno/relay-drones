@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "relay-drones"
+version = "0.1.0"
+description = "A swarm of cheap LLM advisors that escalate to a Claude executor — running on your Claude Max subscription, not the API."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Marc Munoz" }]
+keywords = ["llm", "agents", "claude", "openrouter", "automation", "ai"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: System :: Distributed Computing",
+]
+# Intentionally zero runtime deps — stdlib only. urllib for OpenRouter,
+# sqlite3 for the queue, subprocess for the Claude handoff. Easy to audit.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+relay-drones = "relay_drones.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/marcmunoz-uno/relay-drones"
+Issues = "https://github.com/marcmunoz-uno/relay-drones/issues"
+
+[tool.setuptools.packages.find]
+include = ["relay_drones*"]

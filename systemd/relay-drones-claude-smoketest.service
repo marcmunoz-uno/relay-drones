@@ -1,0 +1,10 @@
+[Unit]
+Description=relay-drones daily Claude OAuth keepalive
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO}}
+# CRITICAL: don't load any env file that might have ANTHROPIC_API_KEY.
+# This must hit OAuth, not the API.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/sh -c 'unset ANTHROPIC_API_KEY; claude -p "respond with the single word OK" --model claude-haiku-4-5-20251001 --output-format json --no-session-persistence >> {{REPO}}/logs/claude-smoketest.log 2>&1'

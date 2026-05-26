@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.relay-drones.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PY}}</string>
+        <string>{{REPO}}/bin/relay-drones</string>
+        <string>worker</string>
+        <string>triage_workers</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO}}</string>
+
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>{{REPO}}/logs/worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{REPO}}/logs/worker.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key><string>1</string>
+        <key>WORKER_POLL_INTERVAL</key><string>30</string>
+        <key>WORKER_ASK_TIMEOUT</key><string>600</string>
+        <!-- IMPORTANT: do NOT set ANTHROPIC_API_KEY here. The worker strips
+             it from the child env anyway, but cleaner to never put it on
+             the LaunchAgent's environment at all. -->
+        <!-- Put OPENROUTER_API_KEY here, OR source it from a .env-style
+             file via UserShellEnv (10.10+) — see launchagents/README.md. -->
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.relay-drones.claude-smoketest</string>
+
+    <!-- Daily ping to `claude -p` to keep the OAuth refresh token warm.
+         Without this, an idle worker pool can let the token expire and
+         the next handoff will fail until you re-/login interactively. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>unset ANTHROPIC_API_KEY; {{CLAUDE}} -p "respond with the single word OK" --model claude-haiku-4-5-20251001 --output-format json --no-session-persistence &gt;&gt; {{REPO}}/logs/claude-smoketest.log 2&gt;&amp;1</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO}}</string>
+
+    <key>RunAtLoad</key><false/>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>9</integer>
+        <key>Minute</key><integer>15</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{REPO}}/logs/claude-smoketest.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{REPO}}/logs/claude-smoketest.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run relay-drones Claude OAuth keepalive daily at 09:15
+
+[Timer]
+OnCalendar=*-*-* 09:15:00
+Persistent=true
+Unit=relay-drones-claude-smoketest.service
+
+[Install]
+WantedBy=timers.target

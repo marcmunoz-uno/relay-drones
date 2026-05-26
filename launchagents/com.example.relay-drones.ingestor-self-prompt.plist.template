@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.relay-drones.ingestor-self-prompt</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PY}}</string>
+        <string>-m</string>
+        <string>relay_drones.ingestors.self_prompt</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO}}</string>
+
+    <key>RunAtLoad</key><false/>
+    <key>StartInterval</key><integer>1800</integer>
+
+    <key>StandardOutPath</key>
+    <string>{{REPO}}/logs/ingestor-self-prompt.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{REPO}}/logs/ingestor-self-prompt.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONPATH</key><string>{{REPO}}</string>
+        <key>PYTHONUNBUFFERED</key><string>1</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.python-version
+
+# Local state — never commit any of these
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.state/
+inbox/
+inbox/processed/
+results/
+logs/
+.omc/
+artifacts/
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Generated LaunchAgent installs (templates stay, rendered plists don't)
+launchagents/installed/

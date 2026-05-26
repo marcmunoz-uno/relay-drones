@@ -1,0 +1,19 @@
+[Unit]
+Description=relay-drones worker (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{REPO}}
+EnvironmentFile=-%h/.config/relay-drones/env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH={{REPO}}
+ExecStart={{PY}} {{REPO}}/bin/relay-drones worker triage_workers
+Restart=always
+RestartSec=30s
+# Worker.py strips ANTHROPIC_API_KEY from the child env, but don't expose
+# it to this unit at all — keep the OAuth path the only path.
+
+[Install]
+WantedBy=default.target

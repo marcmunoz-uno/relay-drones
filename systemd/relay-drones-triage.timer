@@ -1,0 +1,10 @@
+[Unit]
+Description=Run relay-drones triage every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=relay-drones-triage.service
+
+[Install]
+WantedBy=timers.target
