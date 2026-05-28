@@ -68,6 +68,22 @@ The cheap worker's response ends with a single-line JSON object:
 2. **Daily budget** under the cap (`40` by default, configurable)
 3. **Handoff depth** under the cap (`2` by default — see [docs/safety-rails.md](docs/safety-rails.md))
 
+Eight `action_kind` values ship in the default allowlist, ordered by what they enable:
+
+| Kind | What it does | Path |
+|---|---|---|
+| `notify_human` | Send a Telegram / ntfy / webhook ping. No Claude spawned. | Worker-direct |
+| `tail_log` | Read-only `tail`/`head`/`grep` against a log file. | Claude, read-only tools |
+| `config_inspect` | Read-only `cat`/`grep` against config files. | Claude, read-only tools |
+| `service_health` | `curl`/`ping`/`systemctl status`/`launchctl list`. | Claude, status tools |
+| `dns_repair` | `dscacheutil -flushcache`, restart resolver. | Claude, dns-tools |
+| `restart_launchagent` | `launchctl bootout`/`bootstrap`. | Claude, launchctl |
+| `cron_disable` | Mark a broken cron disabled. | Claude, edit + launchctl |
+| `config_edit_proposed` | Writes a fix to `<path>.proposed` (NOT the real file). | Claude, `Write(**/*.proposed)` only |
+| `pr_open` | Opens a draft PR in a git repo via `gh pr create`. | Claude with cwd=repo, git+gh tools |
+
+Each kind is scoped via Claude Code's `--allowed-tools` — `config_edit_proposed` can *only* write `.proposed` files, not the real config. This makes the safety property a real enforcement, not just prompt discipline.
+
 …then the worker shells out:
 
 ```python
@@ -85,6 +101,17 @@ subprocess.run(
 That stripped `ANTHROPIC_API_KEY` is the whole trick. With no API key visible, Claude Code falls back to the OAuth credentials in `~/.claude/.credentials.json` and the call runs against your Max subscription. See [docs/oauth-trick.md](docs/oauth-trick.md) for details + the failure modes.
 
 If any gate fails or the tail is missing, the advisory is recorded and nothing is escalated. The cheap worker is still useful as a memo writer; the handoff is opt-in per-task.
+
+## Memory of attempted fixes
+
+Without memory, the system rediscovers the same broken cron every 15 minutes and produces the same advisory forever. With memory (the `attempted_fixes` table), the loop closes: ingestors that set a `target:` in their note's frontmatter get checked against recent attempts before re-queuing.
+
+- 0 prior attempts in last 24h → queue normally.
+- 1 prior unsuccessful attempt → retry allowed (one more try).
+- 2+ prior unsuccessful attempts → suppress; the human got `notify_human` from the earlier attempts and the system should stop spamming itself.
+- 1 prior successful attempt → suppress (problem fixed; nothing to re-investigate).
+
+The worker writes a row to `attempted_fixes` after every handoff with the outcome (`success`, `skipped`, `failed`, or `notified`). The same SQLite DB as the task queue, so no extra service to run.
 
 ## Project layout
 

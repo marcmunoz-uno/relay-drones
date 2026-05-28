@@ -20,8 +20,9 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
-from relay_drones import queue
+from relay_drones import attempted_fixes, queue
 from relay_drones.config import (
     CLAUDE_ACTION_ALLOWLIST,
     POLL_INTERVAL,
@@ -30,13 +31,70 @@ from relay_drones.config import (
     RESULTS,
     ROLES,
 )
-from relay_drones.lib import bb, claude_handoff
+from relay_drones.lib import bb, claude_handoff, notify
 from relay_drones.lib.claim import claim_next
 from relay_drones.lib.openrouter import (
     ask as or_ask,
     ask_with_fallback as or_ask_fallback,
     OpenRouterError,
 )
+
+
+def _read_target(task: dict) -> Optional[str]:
+    """Pull the `target` tag from the task. Used by attempted_fixes."""
+    tags = task.get("tags")
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(tags, dict):
+        t = tags.get("target")
+        return str(t) if t else None
+    return None
+
+
+def _handle_notify_human(
+    *, advisory: str, brief: str, reason: str, task_id: str, kind: str
+) -> dict:
+    """Worker-direct path: send a notification, no Claude subprocess.
+
+    The cheap LLM provided everything we need (advisory body + brief).
+    Spending a Claude run just to call Telegram would waste budget on a
+    mechanical operation. Returns the same envelope shape as
+    claude_handoff.run() so the dump path is uniform.
+    """
+    title = f"relay-drones: {brief[:80] or kind}"
+    body = (
+        f"Task: {task_id}\n"
+        f"Reason: {reason or '(none)'}\n\n"
+        f"Advisory:\n{advisory[:1500]}\n\n"
+        f"Brief:\n{brief[:1500]}"
+    )
+    result = notify.send(title, body)
+    backends_tried = ", ".join(f"{name}={'ok' if ok else detail}"
+                               for name, ok, detail in result.tried)
+    if not result.ok:
+        return {
+            "raw": "",
+            "artifact_path": "",
+            "provider": "notify:none",
+            "exit_code": 1,
+            "skipped": True,
+            "skip_reason": f"no notify backend delivered ({backends_tried or 'none configured'})",
+            "meta": {"action_kind": kind, "backends_tried": result.tried},
+        }
+    return {
+        "raw": f"notify delivered via: {backends_tried}",
+        "artifact_path": "",
+        "provider": "notify:" + ",".join(
+            n for n, ok, _ in result.tried if ok
+        ) or "notify:?",
+        "exit_code": 0,
+        "skipped": False,
+        "skip_reason": None,
+        "meta": {"action_kind": kind, "backends_tried": result.tried},
+    }
 
 _shutdown = False
 
@@ -75,20 +133,35 @@ def _build_prompt(task: dict, role_cfg: dict) -> str:
         f"---\n"
         f"\n"
         f"Then, on the FINAL line of your response, emit a JSON object on a "
-        f"single line that decides whether this diagnosis should be escalated "
-        f"to a Claude executor with tool access. Schema:\n"
+        f"single line deciding whether this should escalate. Schema:\n"
         f"\n"
         f"  {{\"actionable\": bool, \"action_kind\": str|null, "
-        f"\"action_brief\": str|null, \"handoff_reason\": str|null}}\n"
+        f"\"action_brief\": str|null, \"handoff_reason\": str|null, "
+        f"\"repo_root\": str|null}}\n"
         f"\n"
-        f"Set actionable=true ONLY when the fix needs filesystem/shell access "
-        f"AND fits one of these action_kind values: {allowlist}. "
-        f"Otherwise actionable=false. action_brief, when set, should be a "
-        f"3-6 line concrete instruction Claude can execute (commands, file "
-        f"paths, expected outcome). handoff_reason is one short sentence. "
-        f"If unsure, default to actionable=false — the advisory still gets "
-        f"recorded. Output exactly one JSON object on the final line, no "
-        f"code fences."
+        f"Set actionable=true ONLY when the situation needs more than a memo. "
+        f"Pick action_kind from this allowlist: {allowlist}. Guidance on which:\n"
+        f"\n"
+        f"  - notify_human          — too unclear, ambiguous, or risky for the "
+        f"system to handle. Sends a Telegram/ntfy/webhook ping with your "
+        f"advisory. Use this freely; it's cheap and unblocks the human.\n"
+        f"  - tail_log              — read-only inspection of log files.\n"
+        f"  - config_inspect        — read-only inspection of config files.\n"
+        f"  - service_health        — read-only probes (curl, ping, status).\n"
+        f"  - dns_repair            — flush DNS cache; restart mDNSResponder.\n"
+        f"  - restart_launchagent   — bounce a LaunchAgent that's wedged.\n"
+        f"  - cron_disable          — mark a broken cron disabled until human "
+        f"reviews. Prefer this over endless retries.\n"
+        f"  - config_edit_proposed  — write a fix to <path>.proposed (NOT the "
+        f"real file) and notify. Use when you have a concrete, mechanical fix.\n"
+        f"  - pr_open               — for repos under user control, open a "
+        f"draft PR with the fix. Set repo_root to the absolute repo path.\n"
+        f"\n"
+        f"Otherwise actionable=false. action_brief, when set, is a 3-6 line "
+        f"concrete instruction (commands, file paths, expected outcome). "
+        f"handoff_reason is one short sentence. repo_root is only used for "
+        f"pr_open. Default to actionable=false when unsure. Output exactly "
+        f"one JSON object on the final line, no code fences."
     )
 
 
@@ -211,11 +284,13 @@ def run_one(role: str, role_cfg: dict) -> bool:
         ask_result["raw"] = body
 
         handoff_result = None
+        target = _read_target(task)
         if tail and tail.get("actionable") is True:
             depth = _read_depth(task)
             kind = (tail.get("action_kind") or "").strip()
             brief = (tail.get("action_brief") or "").strip()
             reason = (tail.get("handoff_reason") or "").strip()
+            repo_root = (tail.get("repo_root") or "").strip() or None
             if not kind or not brief:
                 handoff_result = {
                     "skipped": True,
@@ -229,6 +304,29 @@ def run_one(role: str, role_cfg: dict) -> bool:
                     f"handoff-skip {task_id} [{role}]: malformed tail "
                     f"(kind={kind!r}, brief_len={len(brief)})",
                 )
+            elif kind == "notify_human":
+                # Worker-direct path. No Claude subprocess, no budget burn.
+                # Still passes through the allowlist gate (notify_human is
+                # in the default allowlist) but bypasses depth/budget which
+                # only protect against expensive recursion.
+                if kind not in CLAUDE_ACTION_ALLOWLIST:
+                    handoff_result = {
+                        "skipped": True,
+                        "skip_reason": f"notify_human not in allowlist",
+                        "provider": "notify:disabled",
+                        "raw": "",
+                        "artifact_path": "",
+                    }
+                else:
+                    handoff_result = _handle_notify_human(
+                        advisory=body, brief=brief, reason=reason,
+                        task_id=task_id, kind=kind,
+                    )
+                    bb.post_message(
+                        label,
+                        f"notify {task_id} [{role}]: "
+                        f"{'delivered' if not handoff_result.get('skipped') else handoff_result.get('skip_reason')}",
+                    )
             else:
                 try:
                     handoff_result = claude_handoff.run(
@@ -238,6 +336,7 @@ def run_one(role: str, role_cfg: dict) -> bool:
                         handoff_reason=reason or "(no reason given)",
                         depth=depth,
                         task_id=task_id,
+                        repo_root=repo_root,
                     )
                     if handoff_result.get("skipped"):
                         bb.post_message(
@@ -264,6 +363,28 @@ def run_one(role: str, role_cfg: dict) -> bool:
                         label,
                         f"handoff-fail {task_id} [{role}] kind={kind}: {e}",
                     )
+
+            # Record what we attempted so future ingestor passes don't
+            # re-queue the same problem indefinitely. Outcome maps:
+            #   skipped → "skipped"  (gate refused)
+            #   notify_human OK → "notified"
+            #   real handoff OK → "success"
+            #   anything else → "failed"
+            if target:
+                if handoff_result.get("skipped"):
+                    outcome = "skipped"
+                elif kind == "notify_human":
+                    outcome = "notified"
+                else:
+                    outcome = "success"
+                attempted_fixes.record(
+                    target=target,
+                    action_kind=kind,
+                    outcome=outcome,
+                    advisory_task_id=task_id,
+                    handoff_artifact=handoff_result.get("artifact_path") or None,
+                    detail=(handoff_result.get("skip_reason") or "")[:200],
+                )
 
         result_path = _dump_result(task_id, role, ask_result, tail, handoff_result)
         snippet = ask_result["raw"][:1200]

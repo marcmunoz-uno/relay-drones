@@ -120,7 +120,10 @@ _DEFAULT_ALLOWLIST = (
     "dns_repair,"
     "cron_disable,"
     "config_inspect,"
-    "service_health"
+    "service_health,"
+    "notify_human,"           # worker-direct path; never spawns Claude
+    "config_edit_proposed,"   # writes <path>.proposed; tool surface enforces it
+    "pr_open"                 # draft PR against a git repo
 )
 CLAUDE_ACTION_ALLOWLIST = {
     s.strip()

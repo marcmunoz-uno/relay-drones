@@ -94,11 +94,21 @@ The worker process itself is pure Python + HTTP. It has no `Bash`, `Edit`, or `W
 `lib/claude_handoff.py` wraps `subprocess.run(["claude", "-p", ...])` with:
 
 - **Env scrubbing.** Removes `ANTHROPIC_API_KEY` from the child env. With no key visible, Claude Code uses OAuth → Max plan.
-- **Daily budget.** Counts successful runs per UTC day under `~/agent-loop/.state/claude_budget.json`. Past cap, returns `skipped=True`.
+- **Daily budget.** Counts successful runs per UTC day under the state file. Past cap, returns `skipped=True`.
 - **Depth guard.** Reads depth from caller. Past cap (default 2), returns `skipped=True`.
 - **Allowlist.** Only specific `action_kind` strings are accepted. Anything else, `skipped=True`.
+- **Per-kind tool scoping.** Each `action_kind` in `ACTION_KIND_TOOLS` maps to a `--allowed-tools` spec — `config_edit_proposed` only gets `Write(**/*.proposed)`, `pr_open` gets `Bash(git/gh:*)`, etc. The tool surface itself enforces the safety property.
+- **Optional working directory.** `pr_open` passes `repo_root` as subprocess `cwd` so `git` and `gh` operate on the right repo.
 
 A skipped handoff is not an error; the advisory is still persisted. Hard errors (subprocess failure, JSON parse failure) raise `HandoffError` and the worker logs them.
+
+### notify_human (worker-direct, no Claude)
+
+When `action_kind=notify_human`, the worker calls `lib.notify.send()` directly — no subprocess, no budget burn. The advisory body + brief are sent to whichever backends are configured (Telegram, ntfy, webhook). This is for cases where the cheap LLM has decided the right action is "tell the human" rather than "do something."
+
+### attempted_fixes memory
+
+A separate SQLite table `attempted_fixes` records every handoff with `(target, action_kind, outcome, created_at)`. Ingestors that emit `target:` in their frontmatter consult this memory before generating new notes — if a target has already been escalated unsuccessfully twice in the last 24h, the ingestor suppresses the note rather than spamming the same advisory.
 
 ## Why a subprocess instead of an SDK?
 

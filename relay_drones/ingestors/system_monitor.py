@@ -21,6 +21,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from relay_drones import attempted_fixes
 from relay_drones.config import INBOX
 from relay_drones.ingestors._lib import load_state, save_state, write_note
 
@@ -94,6 +95,10 @@ def _crash_key(c: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="bypass attempted_fixes memory; queue notes even if recently tried",
+    )
     args = parser.parse_args(argv)
 
     if _pending_inbox_count() >= INBOX_BACKPRESSURE:
@@ -121,7 +126,18 @@ def main(argv: list[str] | None = None) -> int:
 
     new = new[:MAX_NEW_NOTES]
     written = 0
+    suppressed = 0
     for key, item in new:
+        target = f"crash:{item['coalition']}:{item['top']}"
+        # attempted_fixes memory — don't keep re-queuing the same problem
+        # if it's already been handed off and is either fixed or stuck.
+        skip, why = attempted_fixes.should_skip(target, since_hours=24)
+        if skip and not args.force:
+            print(f"  suppress {target} — {why}")
+            suppressed += 1
+            seen.add(key)
+            continue
+
         title = f"Investigate Python crash in {item['coalition']}"
         body = (
             "A Python segfault was recorded on this machine.\n"
@@ -137,7 +153,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             print(f"  [dry-run] would write: {title}")
         else:
-            p = write_note(title, body, priority=2, source="system_monitor")
+            p = write_note(
+                title, body, priority=2, source="system_monitor",
+                extra_frontmatter={"target": target},
+            )
             print(f"  wrote {p.name}")
             written += 1
         seen.add(key)

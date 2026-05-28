@@ -45,6 +45,47 @@ from relay_drones.config import (
     MAX_HANDOFF_DEPTH,
 )
 
+# Per-action-kind tool scoping. The whole safety story of config_edit_proposed
+# rests on `--allowed-tools Write(*.proposed)`: if Claude is technically
+# capable of writing arbitrary files (which `--permission-mode bypassPermissions`
+# allows), then "only write to .proposed siblings" is just prompt discipline —
+# not enforcement. Locking the tool surface per kind makes the rule a real
+# property of the system.
+#
+# Pattern grammar comes from Claude Code's --allowed-tools:
+#   Tool                                — bare tool name allows everything
+#   Tool(pattern)                       — pattern-restricted use
+#   Bash(<cmd>:*)                       — only `<cmd>` invocations
+#
+# Notes:
+# - `notify_human` is handled in worker.py directly (no Claude subprocess).
+#   It is NOT in this map.
+# - Keep these conservative. Adding capabilities is cheap; revoking them
+#   after the cheap LLM gets used to having them is harder.
+ACTION_KIND_TOOLS: dict[str, str] = {
+    "tail_log": "Read Glob Bash(tail:*) Bash(head:*) Bash(wc:*) Bash(grep:*)",
+    "config_inspect": "Read Glob Grep Bash(cat:*) Bash(grep:*)",
+    "dns_repair": "Bash(dscacheutil:*) Bash(killall:*) Bash(scutil:*) Bash(ipconfig:*)",
+    "service_health": "Bash(curl:*) Bash(ping:*) Bash(systemctl:status*) Bash(launchctl:list*) Bash(launchctl:print*)",
+    "cron_disable": "Read Edit Bash(launchctl:bootout*) Bash(launchctl:disable*)",
+    "restart_launchagent": "Bash(launchctl:*)",
+    "config_edit_proposed": "Read Glob Grep Write(**/*.proposed)",
+    # pr_open is the broadest by design — Claude needs to edit, commit, push.
+    # The approval gate is the draft-PR review flow, not the tool surface.
+    "pr_open": "Read Edit Write Glob Grep Bash(git:*) Bash(gh:pr*) Bash(gh:repo*) Bash(gh:auth*)",
+}
+
+
+def _tools_for(action_kind: str) -> Optional[str]:
+    """Return the --allowed-tools spec for a kind, or None to omit the flag.
+
+    Omission means "use the default tool set" (whatever the user's Claude
+    Code config allows). That's the right behavior for action kinds we
+    haven't explicitly scoped — falls back to the existing safety
+    boundaries.
+    """
+    return ACTION_KIND_TOOLS.get(action_kind)
+
 
 class HandoffError(RuntimeError):
     """Raised when the handoff itself fails (subprocess crash, JSON parse, etc).
@@ -152,6 +193,7 @@ def run(
     handoff_reason: str,
     depth: int,
     task_id: str,
+    repo_root: Optional[str] = None,
     model: Optional[str] = None,
     timeout: Optional[int] = None,
 ) -> dict:
@@ -160,6 +202,9 @@ def run(
     Caller is the worker. Guards are checked first; if any fail we return
     a skipped envelope (NOT an exception) so the worker can still log an
     advisory-only result.
+
+    `repo_root` only matters for `action_kind="pr_open"` — sets the subprocess
+    cwd so `git` and `gh` operate on the right repo. Other kinds ignore it.
     """
     skip = can_run(action_kind, depth)
     if skip:
@@ -167,6 +212,16 @@ def run(
 
     model = model or CLAUDE_HANDOFF_MODEL
     timeout = timeout or CLAUDE_HANDOFF_TIMEOUT
+    allowed_tools = _tools_for(action_kind)
+
+    # Pull the scope hint into the prompt so the model can see the limits
+    # it's been given — helps it write better refusals when an action would
+    # exceed scope.
+    scope_note = (
+        f"Tools available to you for this action: {allowed_tools}.\n"
+        if allowed_tools else ""
+    )
+    cwd_note = f"Working directory: {repo_root}\n" if repo_root else ""
 
     prompt = (
         f"You are executing an automated action proposed by an upstream "
@@ -176,6 +231,8 @@ def run(
         f"Action kind: {action_kind}\n"
         f"Handoff reason: {handoff_reason}\n"
         f"Handoff depth: {depth}\n"
+        f"{cwd_note}"
+        f"{scope_note}"
         f"\n"
         f"--- Upstream advisory ---\n"
         f"{advisory}\n"
@@ -203,11 +260,14 @@ def run(
         "--output-format", "json",
         "--no-session-persistence",
     ]
+    if allowed_tools:
+        cmd.extend(["--allowed-tools", allowed_tools])
 
     started = time.time()
     try:
         result = subprocess.run(
             cmd, env=env, capture_output=True, text=True, timeout=timeout,
+            cwd=repo_root,  # None falls back to caller's cwd
         )
     except subprocess.TimeoutExpired as e:
         raise HandoffError(
@@ -262,6 +322,8 @@ def run(
         "usage": payload.get("usage"),
         "model_usage": payload.get("modelUsage", {}),
         "budget_used_today": data["count"],
+        "allowed_tools": allowed_tools,
+        "repo_root": repo_root,
     }
     artifact = _persist_artifact(prompt, raw, model, meta)
 

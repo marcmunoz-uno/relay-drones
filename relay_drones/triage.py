@@ -63,10 +63,11 @@ def process(path: Path) -> dict:
     priority = _coerce_priority(meta.get("priority"))
     task_type = meta.get("task_type") or meta.get("type")
 
-    # Lift handoff_depth (and reserved knobs) from frontmatter into the
-    # task's tags dict. worker._read_depth reads tags["handoff_depth"] to
-    # enforce MAX_HANDOFF_DEPTH; without this propagation, every handoff
-    # would run at depth=0 and only the daily budget could brake a runaway.
+    # Lift reserved frontmatter keys into the task's tags dict so
+    # downstream code (worker, attempted_fixes) can read them back.
+    #   - handoff_depth: enforces MAX_HANDOFF_DEPTH (worker._read_depth)
+    #   - target:        attempted_fixes dedup key (worker writes outcome
+    #                    rows; ingestors check before re-queuing)
     tags: dict = {}
     raw_depth = meta.get("handoff_depth")
     if raw_depth is not None:
@@ -74,6 +75,9 @@ def process(path: Path) -> dict:
             tags["handoff_depth"] = int(raw_depth)
         except (TypeError, ValueError):
             pass
+    raw_target = meta.get("target")
+    if raw_target:
+        tags["target"] = str(raw_target).strip()
 
     task_id = queue.create_task(
         title=title,
