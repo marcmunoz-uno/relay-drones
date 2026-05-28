@@ -62,3 +62,33 @@ def test_actionable_false_still_parses():
     raw = 'body\n{"actionable": false}'
     body, tail = _extract_handoff(raw)
     assert tail == {"actionable": False}
+
+
+def test_strips_trailing_code_fence():
+    """Free-fallback models often wrap the tail in ```json...``` despite the prompt.
+
+    Regression: nemotron-3-super-120b was emitting fenced JSON tails that
+    the strict regex skipped and the relaxed scanner mis-matched, leading
+    to actionable_tail=None and no handoff. This must work.
+    """
+    raw = (
+        'advisory body here\n\n'
+        '```json\n'
+        '{"actionable": true, "action_kind": "dns_repair", '
+        '"action_brief": "do thing", "handoff_reason": "x"}\n'
+        '```'
+    )
+    from relay_drones.worker import _extract_handoff
+    body, tail = _extract_handoff(raw)
+    assert tail is not None
+    assert tail["actionable"] is True
+    assert tail["action_kind"] == "dns_repair"
+    assert body == "advisory body here"
+
+
+def test_strips_trailing_bare_fence_no_lang_tag():
+    raw = 'advisory\n```\n{"actionable": false}\n```'
+    from relay_drones.worker import _extract_handoff
+    body, tail = _extract_handoff(raw)
+    assert tail == {"actionable": False}
+    assert body == "advisory"

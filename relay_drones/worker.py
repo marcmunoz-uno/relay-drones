@@ -173,12 +173,26 @@ def _extract_handoff(raw: str) -> tuple[str, dict | None]:
 
     The worker prompt asks the model to put a single-line JSON object on the
     final line. Free-fallback models often don't obey perfectly (extra prose,
-    wrapped fences). We try the strict trailing match first, then a relaxed
-    scan-from-end. Returns (body_without_tail, parsed_tail_or_None).
+    wrapped fences). We strip a trailing ```json...``` fence first, then try
+    strict trailing JSON, then a relaxed scan-from-end. Returns
+    (body_without_tail, parsed_tail_or_None).
     """
     if not raw:
         return raw, None
     body = raw.rstrip()
+    # Strip a trailing ```json … ``` (or ``` … ```) code fence — nemotron and
+    # several other models keep wrapping the actionable tail this way despite
+    # being told not to. Match ``` optionally followed by `json` then content
+    # then ``` at the end of the body.
+    fence_m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```\s*\Z", body, re.DOTALL)
+    if fence_m:
+        candidate = fence_m.group(1)
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict) and "actionable" in parsed:
+                return body[: fence_m.start()].rstrip(), parsed
+        except json.JSONDecodeError:
+            pass
     m = _JSON_TAIL_RE.search(body)
     if m:
         try:
